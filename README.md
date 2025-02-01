@@ -1,9 +1,5 @@
 <p align="center">
-  <img src="images/logo.png" alt="Circular Array Logo" width="150"/>
-</p>
-
-<p align="center">
-  <img src="images/screenshot.png" alt="Circular Array Screenshot" width="400"/>
+  <img src="images/screenshot.png" alt="Circular Array Screenshot" width="300"/>
 </p>
 
 ## Installation
