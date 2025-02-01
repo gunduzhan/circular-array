@@ -11,8 +11,8 @@ bl_info = {
 
 import bpy
 import math
-from mathutils import Vector, Matrix, Euler
 import random
+from mathutils import Vector, Matrix, Euler
 import os
 import bpy.utils.previews
 from bpy.types import Operator, Menu
@@ -31,7 +31,13 @@ class CircularArrayProperties(bpy.types.PropertyGroup):
         name="Radius",
         description="Circle radius",
         default=2.0,
-        min=0.0
+        min=0.0,
+        max=100.0,
+        soft_min=0.0,
+        soft_max=20.0,
+        step=10,
+        precision=3,
+        unit='LENGTH'
     )
     rotation_offset: bpy.props.FloatProperty(
         name="Rotation Offset",
@@ -54,25 +60,6 @@ class CircularArrayProperties(bpy.types.PropertyGroup):
             ('SPIRAL', "Spiral", "Create a spiral pattern"),
         ],
         default='SINGLE'
-    )
-    rotation_enable: bpy.props.BoolProperty(
-        name="Custom Rotation",
-        description="Enable custom rotation settings",
-        default=False
-    )
-    rotation_initial: bpy.props.FloatVectorProperty(
-        name="Initial Rotation",
-        description="Starting rotation for objects (degrees)",
-        default=(0.0, 0.0, 0.0),
-        subtype='EULER',
-        unit='ROTATION'
-    )
-    rotation_progressive: bpy.props.FloatVectorProperty(
-        name="Progressive Rotation",
-        description="Additional rotation for each object (degrees)",
-        default=(0.0, 0.0, 0.0),
-        subtype='EULER',
-        unit='ROTATION'
     )
     parent_to_empty: bpy.props.BoolProperty(
         name="Parent to Center",
@@ -117,37 +104,38 @@ class CircularArrayProperties(bpy.types.PropertyGroup):
         default='UP'
     )
     use_random: bpy.props.BoolProperty(
-        name="Use Randomization",
-        description="Enable random variations",
+        name="Use Random",
+        description="Apply random variations to the array objects",
         default=False
     )
-    random_scale: bpy.props.FloatVectorProperty(
-        name="Random Scale",
-        description="Random scale variation range",
-        default=(0.0, 0.0, 0.0),
-        min=0.0,
-        max=1.0,
-        subtype='XYZ'
-    )
-    random_rotation: bpy.props.FloatVectorProperty(
-        name="Random Rotation",
-        description="Random rotation variation range (degrees)",
-        default=(0.0, 0.0, 0.0),
-        subtype='EULER',
-        unit='ROTATION'
-    )
-    random_offset: bpy.props.FloatVectorProperty(
-        name="Random Offset",
-        description="Random position offset range",
-        default=(0.0, 0.0, 0.0),
-        subtype='TRANSLATION',
-        unit='LENGTH'
-    )
     random_seed: bpy.props.IntProperty(
-        name="Random Seed",
-        description="Seed for random variations",
+        name="Seed",
+        description="Random seed for consistent results",
         default=1,
         min=1
+    )
+    random_scale: bpy.props.FloatProperty(
+        name="Scale",
+        description="Random scale variation",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+        precision=3
+    )
+    random_rotation: bpy.props.FloatProperty(
+        name="Rotation",
+        description="Random rotation variation in degrees",
+        default=0.0,
+        min=0.0,
+        max=180.0
+    )
+    random_offset: bpy.props.FloatProperty(
+        name="Offset",
+        description="Random position offset",
+        default=0.0,
+        min=0.0,
+        precision=3,
+        unit='LENGTH'
     )
     distribution_mode: bpy.props.EnumProperty(
         name="Distribution Mode",
@@ -284,18 +272,14 @@ class OBJECT_OT_circular_array(bpy.types.Operator):
         positions = []
         rotations = []
 
-        # Calculate array center (will be different from source location)
-        array_center = source_obj.location.copy()
-
+        # Source objenin konumunu sakla
+        source_pos = source_obj.location.copy()
+        
+        # Çemberin merkezi, source'dan X ekseninde radius kadar mesafede
+        array_center = source_pos + Vector((props.radius, 0, 0))
+        
         # Calculate positions for all objects
         for i in range(props.count):
-            angle = (2 * math.pi * i) / props.count
-            offset_angle = math.radians(props.rotation_offset)
-            total_angle = angle + offset_angle
-
-            # Z değişkenini başlangıçta tanımla
-            z = 0
-
             if props.distribution_mode == 'CURVE':
                 if not props.curve_object:
                     self.report({'ERROR'}, "No curve object selected")
@@ -315,160 +299,134 @@ class OBJECT_OT_circular_array(bpy.types.Operator):
                         self.report({'ERROR'}, "Curve has zero length")
                         return {'CANCELLED'}
 
-                    # Calculate factor along curve
+                    # Calculate offset
                     if props.curve_offset_units == 'FACTOR':
-                        factor = i / (props.count - 1) if props.count > 1 else 0
-                        factor = (factor + props.curve_offset) % 1.0
+                        offset = props.curve_offset
                     else:  # DISTANCE
-                        total_length = curve_length
-                        base_distance = (i / (props.count - 1)) * total_length if props.count > 1 else 0
-                        offset_distance = props.curve_offset_distance
-                        final_distance = (base_distance + offset_distance) % total_length
-                        factor = final_distance / total_length
+                        # Mesafe bazlı offset'i curve uzunluğuna göre normalize et
+                        offset = (props.curve_offset_distance % curve_length) / curve_length
 
-                    # Evaluate curve point
-                    pos, tangent = self.evaluate_curve_point(curve, curve.data.splines[0], factor)
-                    positions.append(pos)
-
-                    # Calculate rotation
-                    if props.follow_curve_rotation:
-                        # Get world up vector
-                        if props.curve_up_axis == 'Z':
-                            up = Vector((0, 0, 1))
-                        elif props.curve_up_axis == 'Y':
-                            up = Vector((0, 1, 0))
-                        elif props.curve_up_axis == 'X':
-                            up = Vector((1, 0, 0))
-                        else:  # CUSTOM
-                            up = props.curve_up_vector.normalized()
-
-                        # Calculate rotation matrix
-                        forward = tangent.normalized()
-                        right = forward.cross(up)
-                        if right.length < 0.001:
-                            right = Vector((1, 0, 0))
-                        right.normalize()
-                        up = right.cross(forward)
+                    # Calculate positions and rotations for all objects
+                    for i in range(props.count):
+                        # Eşit dağılım için factor hesapla
+                        base_factor = i / props.count
                         
-                        rot_mat = Matrix((right, forward, up)).to_4x4().transposed()
-                        rot = rot_mat.to_euler()
-                    else:
-                        rot = source_obj.rotation_euler.copy()
+                        # Offset'i uygula ve 0-1 aralığında tut
+                        eval_factor = (base_factor + offset) % 1.0
 
-                    rotations.append(rot)
-                    continue
+                        # Evaluate curve point
+                        pos, tangent = self.evaluate_curve_point(curve, curve.data.splines[0], eval_factor)
+                        positions.append(pos)
+
+                        # Calculate rotation based on curve tangent
+                        if props.follow_curve_rotation:
+                            # Get world up vector
+                            if props.curve_up_axis == 'Z':
+                                world_up = Vector((0, 0, 1))
+                            elif props.curve_up_axis == 'Y':
+                                world_up = Vector((0, 1, 0))
+                            else:
+                                world_up = Vector((1, 0, 0))
+
+                            # Calculate rotation matrix
+                            forward = tangent.normalized()
+                            
+                            # Right vektörünü hesapla
+                            right = forward.cross(world_up)
+                            if right.length < 0.001:
+                                right = Vector((1, 0, 0))
+                            right.normalize()
+                            
+                            # Up vektörünü forward ve right'a göre hesapla
+                            up = right.cross(forward)
+                            up.normalize()
+                            
+                            # Rotasyon matrisini oluştur
+                            rot_mat = Matrix.Identity(3)
+                            rot_mat.col[0] = right
+                            rot_mat.col[1] = forward
+                            rot_mat.col[2] = up
+                            
+                            # Convert to euler angles - önemli: sıralama XYZ olmalı
+                            rot = rot_mat.to_euler('XYZ')
+                            
+                            # Source objenin orijinal rotasyonunu koru
+                            base_rot = source_obj.rotation_euler.copy()
+                            
+                            # Rotasyonları birleştir
+                            final_rot = Euler((
+                                base_rot.x,
+                                base_rot.y,
+                                rot.z  # Sadece Z eksenindeki rotasyonu uygula
+                            ))
+                            
+                            rotations.append(final_rot)
+                        else:
+                            rot = source_obj.rotation_euler.copy()
+                            rotations.append(rot)
+
+                    # Update source object position and rotation
+                    source_obj.location = positions[0]
+                    source_obj.rotation_euler = rotations[0]
 
                 except Exception as e:
                     self.report({'ERROR'}, f"Error processing curve: {str(e)}")
                     return {'CANCELLED'}
 
-            elif props.distribution_mode == 'ELLIPTICAL':
-                # Elliptical koordinatları hesapla
-                a = props.radius  # Major axis
-                b = props.radius * props.ellipse_ratio  # Minor axis
-                
-                # Temel pozisyonu hesapla
-                x = a * math.cos(total_angle)
-                y = b * math.sin(total_angle)
-                
-                # Ellipse rotasyonunu uygula
-                if props.ellipse_rotation != 0:
-                    rot_angle = math.radians(props.ellipse_rotation)
-                    old_x = x
-                    old_y = y
-                    x = old_x * math.cos(rot_angle) - old_y * math.sin(rot_angle)
-                    y = old_x * math.sin(rot_angle) + old_y * math.cos(rot_angle)
-                
-                # Z pozisyonunu hesapla
-                if props.vertical_mode == 'INCREMENTAL':
-                    z = props.vertical_offset * i
-                elif props.vertical_mode == 'SPIRAL':
-                    current_revolution = i / props.count * props.spiral_revolutions
-                    z = props.vertical_offset * current_revolution
-                    if props.spiral_direction == 'DOWN':
-                        z = -z
-                
-                # Final pozisyonu hesapla
-                pos = array_center + Vector((x, y, z))
-                positions.append(pos)
-                
-                # Rotasyonu hesapla
-                if i == 0:
-                    rot = source_obj.rotation_euler.copy()
-                else:
-                    # Objelerin merkeze bakmasını sağla
-                    tangent_angle = math.atan2(y, x)
-                    rot = Euler((0, 0, tangent_angle + math.pi/2))
-                    # Source object'in rotasyonunu ekle
-                    rot.x += source_obj.rotation_euler.x
-                    rot.y += source_obj.rotation_euler.y
-                    rot.z += source_obj.rotation_euler.z
-                
-                rotations.append(rot)
-                continue  # Diğer hesaplamaları atla
+            else:
+                # Normal circular/elliptical array için açı hesaplaması
+                angle = (2 * math.pi * i) / props.count - math.pi
+                offset_angle = math.radians(props.rotation_offset)
+                total_angle = angle + offset_angle
 
-            # Default to circular distribution
-            x = math.cos(angle) * props.radius
-            y = math.sin(angle) * props.radius
-
-            # Calculate vertical offset (only for non-curve modes)
-            if props.distribution_mode != 'CURVE':
-                if props.vertical_mode == 'SINGLE':
-                    z = props.vertical_offset
-                elif props.vertical_mode == 'INCREMENTAL':
-                    z = props.vertical_offset * i
-                elif props.vertical_mode == 'SPIRAL':
-                    current_revolution = i / props.count * props.spiral_revolutions
-                    z = props.vertical_offset * current_revolution
-                    if props.spiral_direction == 'DOWN':
-                        z = -z
-
-            pos = source_obj.location + Vector((x, y, z))
-            
-            # Update rotation calculation in execute method (for non-curve modes)
-            if props.distribution_mode != 'CURVE':
-                # Calculate base rotation
                 if props.distribution_mode == 'ELLIPTICAL':
-                    # Calculate tangent direction for ellipse
-                    tangent_angle = math.atan2(y, x)
-                    if props.ellipse_rotation != 0:
-                        tangent_angle += math.radians(props.ellipse_rotation * 2)
-                    # Rotate objects to face outward from center
-                    rot = Euler((0, 0, tangent_angle))
-                else:  # CIRCULAR
-                    # Keep original rotation for first object (source)
-                    if i == 0:
-                        rot = source_obj.rotation_euler.copy()
-                    else:
-                        # Calculate rotation based on position in circle
-                        angle = math.atan2(y, x)
-                        # Objects should face outward from center
-                        rot = Euler((0, 0, angle))
-
-                # Apply custom rotation if enabled
-                if props.rotation_enable and i > 0:
-                    # Add initial rotation
-                    rot.x += math.radians(props.rotation_initial.x)
-                    rot.y += math.radians(props.rotation_initial.y)
-                    rot.z += math.radians(props.rotation_initial.z)
+                    # Elliptical koordinatları hesapla
+                    a = props.radius  # Major axis
+                    b = props.radius * props.ellipse_ratio  # Minor axis
                     
-                    # Add progressive rotation
-                    rot.x += math.radians(props.rotation_progressive.x) * i
-                    rot.y += math.radians(props.rotation_progressive.y) * i
-                    rot.z += math.radians(props.rotation_progressive.z) * i
+                    # Çember üzerindeki pozisyonu hesapla
+                    x = array_center.x + (a * math.cos(total_angle))
+                    y = array_center.y + (b * math.sin(total_angle))
+                    
+                    if props.ellipse_rotation != 0:
+                        rot_angle = math.radians(props.ellipse_rotation)
+                        rel_x = x - array_center.x
+                        rel_y = y - array_center.y
+                        x = array_center.x + (rel_x * math.cos(rot_angle) - rel_y * math.sin(rot_angle))
+                        y = array_center.y + (rel_x * math.sin(rot_angle) + rel_y * math.cos(rot_angle))
+                else:  # CIRCULAR
+                    # Çember üzerindeki pozisyonu hesapla
+                    x = array_center.x + (props.radius * math.cos(total_angle))
+                    y = array_center.y + (props.radius * math.sin(total_angle))
 
-                # Add source object's base rotation for consistent orientation
-                if i > 0:
-                    rot.x += source_obj.rotation_euler.x
-                    rot.y += source_obj.rotation_euler.y
-                    rot.z += source_obj.rotation_euler.z
+                # Calculate vertical offset
+                if props.vertical_mode == 'SINGLE':
+                    z = source_pos.z + props.vertical_offset
+                elif props.vertical_mode == 'INCREMENTAL':
+                    z = source_pos.z + (props.vertical_offset * i)
+                elif props.vertical_mode == 'SPIRAL':
+                    current_revolution = i / props.count * props.spiral_revolutions
+                    z = source_pos.z + (props.vertical_offset * current_revolution)
+                    if props.spiral_direction == 'DOWN':
+                        z = source_pos.z - (props.vertical_offset * current_revolution)
 
-            positions.append(pos)
-            rotations.append(rot)
+                pos = Vector((x, y, z))
+                positions.append(pos)
+
+                # Calculate rotation
+                angle = math.atan2(y - array_center.y, x - array_center.x)
+                rot = Euler((0, 0, angle + math.pi/2))
+                rot.x += source_obj.rotation_euler.x
+                rot.y += source_obj.rotation_euler.y
+                rot.z += source_obj.rotation_euler.z
+
+                rotations.append(rot)
 
         # Update or create objects
         created_objects = []
-        created_objects.append(source_obj)  # First object is source, don't modify it
+        
+        # Source objeyi listeye ekle
+        created_objects.append(source_obj)
 
         # Update or create other objects
         for i in range(1, props.count):
@@ -479,14 +437,43 @@ class OBJECT_OT_circular_array(bpy.types.Operator):
                 obj.data = source_obj.data
                 context.scene.collection.objects.link(obj)
             
-            # Update transform
-            obj.location = positions[i]  # Use positions[i] directly
+            # Reset transforms to base values first
+            obj.location = positions[i]
             obj.rotation_euler = rotations[i]
+            obj.scale = source_obj.scale.copy()  # Reset scale to source object's scale
+
+            # Apply randomization if enabled
+            if props.use_random:
+                # Set random seed for consistent results
+                random.seed(props.random_seed + i)
+                
+                # Random scale
+                if props.random_scale > 0:
+                    random_scale = 1.0 + (random.uniform(-props.random_scale, props.random_scale))
+                    obj.scale = source_obj.scale * random_scale
+                
+                # Random rotation
+                if props.random_rotation > 0:
+                    random_rot_x = random.uniform(-props.random_rotation, props.random_rotation)
+                    random_rot_y = random.uniform(-props.random_rotation, props.random_rotation)
+                    random_rot_z = random.uniform(-props.random_rotation, props.random_rotation)
+                    obj.rotation_euler.x += math.radians(random_rot_x)
+                    obj.rotation_euler.y += math.radians(random_rot_y)
+                    obj.rotation_euler.z += math.radians(random_rot_z)
+                
+                # Random offset
+                if props.random_offset > 0:
+                    random_offset_x = random.uniform(-props.random_offset, props.random_offset)
+                    random_offset_y = random.uniform(-props.random_offset, props.random_offset)
+                    random_offset_z = random.uniform(-props.random_offset, props.random_offset)
+                    obj.location += Vector((random_offset_x, random_offset_y, random_offset_z))
+            
             created_objects.append(obj)
 
         # Remove extra objects
-        for obj in array_objects[max(0, props.count-1):]:
-            bpy.data.objects.remove(obj, do_unlink=True)
+        if len(array_objects) > (props.count - 1):
+            for obj in array_objects[props.count-1:]:
+                bpy.data.objects.remove(obj, do_unlink=True)
 
         # Handle parenting based on mode
         if props.parent_mode == 'EMPTY':
@@ -532,13 +519,13 @@ class OBJECT_OT_circular_array(bpy.types.Operator):
 
         return {'FINISHED'}
 
-    def evaluate_curve_point(self, curve, spline, local_distance):
+    def evaluate_curve_point(self, curve, spline, factor):
         """Evaluate point and tangent on curve at given distance"""
         if spline.type == 'BEZIER':
             points = spline.bezier_points
             segments = len(points) - 1
-            segment_idx = int(local_distance * segments)
-            t = (local_distance * segments) % 1.0
+            segment_idx = int(factor * segments)
+            t = (factor * segments) % 1.0
             
             # Get control points in world space
             p0 = curve.matrix_world @ points[segment_idx].co
@@ -561,15 +548,15 @@ class OBJECT_OT_circular_array(bpy.types.Operator):
             # For non-bezier splines
             points = spline.points
             segments = len(points) - 1
-            segment_idx = int(local_distance * segments)
-            t = (local_distance * segments) % 1.0
+            segment_idx = int(factor * segments)
+            t = (factor * segments) % 1.0
             
             p0 = curve.matrix_world @ points[segment_idx].co
             p1 = curve.matrix_world @ points[min(segment_idx + 1, len(points) - 1)].co
             
             pos = p0.lerp(p1, t)
             tangent = p1 - p0
-        
+
         return pos, tangent
 
 class VIEW3D_PT_circular_array(bpy.types.Panel):
@@ -583,9 +570,9 @@ class VIEW3D_PT_circular_array(bpy.types.Panel):
         layout = self.layout
         props = context.scene.circular_array_props
 
-        # Preset menüsünü ekle
+        # Preset Row
         row = layout.row(align=True)
-        row.menu("CIRCULARARRAY_MT_presets", icon='PRESET')
+        row.menu("CIRCULARARRAY_MT_presets", text="Presets", icon='PRESET')
         row.operator("circular_array.preset_add", text="", icon='ADD')
         row.operator("circular_array.preset_add", text="", icon='REMOVE').remove_active = True
 
@@ -594,18 +581,18 @@ class VIEW3D_PT_circular_array(bpy.types.Panel):
         box.label(text="Basic Settings:", icon='SETTINGS')
         col = box.column(align=True)
         col.prop(props, "count")
-        col.prop(props, "radius")
+        col.prop(props, "radius", slider=True)
         col.prop(props, "rotation_offset")
 
         # Distribution Settings
         box = layout.box()
-        box.label(text="Distribution:", icon='MOD_ARRAY')
+        box.label(text="Distribution:", icon='DRIVER_DISTANCE')
         box.prop(props, "distribution_mode", text="Type")
         
         if props.distribution_mode == 'ELLIPTICAL':
             col = box.column(align=True)
             row = col.row(align=True)
-            row.prop(props, "ellipse_ratio", slider=True)  # Slider for better UX
+            row.prop(props, "ellipse_ratio", slider=True)
             row = col.row(align=True)
             row.prop(props, "ellipse_rotation")
 
@@ -627,15 +614,6 @@ class VIEW3D_PT_circular_array(bpy.types.Panel):
         if props.vertical_mode == 'SPIRAL':
             col.prop(props, "spiral_revolutions")
             col.prop(props, "spiral_direction")
-
-        # Advanced Settings
-        box = layout.box()
-        row = box.row()
-        row.prop(props, "rotation_enable", text="Advanced Rotation", icon='DRIVER_ROTATIONAL_DIFFERENCE')
-        if props.rotation_enable:
-            col = box.column(align=True)
-            col.prop(props, "rotation_initial")
-            col.prop(props, "rotation_progressive")
 
         # Randomization Settings
         box = layout.box()
@@ -659,13 +637,18 @@ class VIEW3D_PT_circular_array(bpy.types.Panel):
             box = layout.box()
             box.label(text="Curve Settings:", icon='CURVE_DATA')
             col = box.column(align=True)
-            col.prop(props, "curve_object")
+            
+            # Curve object selection
+            row = col.row(align=True)
+            row.prop(props, "curve_object")
+            row.operator("curve.primitive_bezier_curve_add", text="", icon='ADD')
+            
             if props.curve_object:
-                col.prop(props, "follow_curve_rotation")
-                col.prop(props, "curve_up_axis")
-                if props.curve_up_axis == 'CUSTOM':
-                    col.prop(props, "curve_up_vector")
+                col.prop(props, "follow_curve_rotation", icon='ORIENTATION_GIMBAL')
+                if props.follow_curve_rotation:
+                    col.prop(props, "curve_up_axis", expand=True)
                 
+                # Curve offset settings
                 row = col.row(align=True)
                 row.prop(props, "curve_offset_units", expand=True)
                 if props.curve_offset_units == 'FACTOR':
@@ -674,55 +657,37 @@ class VIEW3D_PT_circular_array(bpy.types.Panel):
                     col.prop(props, "curve_offset_distance")
 
         # Create/Update Button
+        layout.separator()
         is_array = (context.active_object and 
-                   ("Circular_Array_Center_" in context.active_object.name or
-                    (context.active_object.parent and "Circular_Array_Center_" in context.active_object.parent.name) or
-                    any(obj.parent == context.active_object for obj in bpy.data.objects)))
-
+                    ("Circular_Array_Center_" in context.active_object.name or
+                     (context.active_object.parent and "Circular_Array_Center_" in context.active_object.parent.name)))
+        
         row = layout.row(align=True)
-        row.scale_y = 1.5  # Bigger button
-        row.operator("object.circular_array", 
-                    icon='MOD_ARRAY',
-                    text="Update Array" if is_array else "Create Array")
+        row.scale_y = 1.5
+        row.operator("object.circular_array",
+                    text="Update Array" if is_array else "Create Array",
+                    icon='MOD_ARRAY')
 
 # Preset operatörü
-class CIRCULARARRAY_OT_add_preset(AddPresetBase, Operator):
+class OBJECT_OT_add_circular_array_preset(AddPresetBase, Operator):
     bl_idname = "circular_array.preset_add"
     bl_label = "Add Circular Array Preset"
     bl_description = "Add or remove a preset"
     preset_menu = "CIRCULARARRAY_MT_presets"
 
-    # Preset değerlerini belirle
-    preset_defines = [
-        "scene = bpy.context.scene",
-        "props = scene.circular_array_props"
-    ]
+    # Preset tanımlamaları
+    spiral_preset = {
+        'count': 36,
+        'radius': 3.0,
+        'rotation_offset': 0,
+        'vertical_offset': 0.5,  # Daha belirgin spiral için arttırıldı
+        'vertical_mode': 'SPIRAL',
+        'spiral_revolutions': 2.0,  # İki tam dönüş için
+        'distribution_mode': 'CIRCULAR',
+        'parent_mode': 'EMPTY'
+    }
 
-    # Hangi özelliklerin kaydedileceğini belirle
-    preset_values = [
-        "props.count",
-        "props.radius",
-        "props.rotation_offset",
-        "props.vertical_offset",
-        "props.vertical_mode",
-        "props.distribution_mode",
-        "props.ellipse_ratio",
-        "props.ellipse_rotation",
-        "props.spiral_revolutions",
-        "props.spiral_direction",
-        "props.rotation_enable",
-        "props.rotation_initial",
-        "props.rotation_progressive",
-        "props.parent_mode",
-        "props.use_random",
-        "props.random_scale",
-        "props.random_rotation",
-        "props.random_offset",
-        "props.random_seed",
-    ]
-
-    # Preset dosyalarının konumu
-    preset_subdir = "circular_array"
+    # Diğer presetler de eklenebilir...
 
 # Preset menüsü
 class CIRCULARARRAY_MT_presets(Menu):
@@ -809,7 +774,7 @@ classes = (
     CircularArrayProperties,
     OBJECT_OT_circular_array,
     VIEW3D_PT_circular_array,
-    CIRCULARARRAY_OT_add_preset,
+    OBJECT_OT_add_circular_array_preset,
     CIRCULARARRAY_MT_presets,
 )
 
