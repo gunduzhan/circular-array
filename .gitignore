@@ -1,3 +1,4 @@
 .DS_Store
 ideas.md
 circular_array/__init__.py
+circular_array/blender_manifest.toml
