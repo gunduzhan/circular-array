@@ -6,7 +6,7 @@
 1. Download the latest release from the releases page
 2. In Blender, go to Edit > Preferences > Add-ons
 3. Click "Install" and select the downloaded .zip file
-4. Enable the addon by checking the box next to "Object: Circular Array"
+4. Enable the addon by checking the box next to "Circular Array"
 
 ## Usage
 1. Select an object in Object Mode
