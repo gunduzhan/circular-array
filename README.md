@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/logo.png" alt="Circular Array Logo" width="400"/>
+  <img src="images/logo.png" alt="Circular Array Logo" width="150"/>
 </p>
 
 <p align="center">
