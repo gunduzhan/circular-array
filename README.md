@@ -2,6 +2,10 @@
   <img src="images/screenshot.png" alt="Circular Array Screenshot" width="300"/>
 </p>
 
+# Circular Array Addon for Blender
+
+A powerful Blender addon that was entirely developed with the assistance of [CURSOR AI](https://www.cursor.com), creating advanced circular arrays with multiple distribution modes and extensive customization options.
+
 ## Installation
 1. Download the latest release from the releases page
 2. In Blender, go to Edit > Preferences > Add-ons
